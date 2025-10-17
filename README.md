@@ -1,4 +1,4 @@
-# ticket_app
+# Edupro Excellerate App
 
 A new Flutter project.
 
