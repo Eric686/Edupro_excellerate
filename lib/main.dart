@@ -60,13 +60,13 @@ class EduProApp extends StatelessWidget {
 /*  DATA LAYER (Local "DB" with SharedPreferences)                             */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-const _kUsersKey = 'edupro.users.v1';            // Map<id, UserProfile>
+const _kUsersKey = 'edupro.users.v1';
 const _kCurrentUserIdKey = 'edupro.currentUserId.v1';
 
 enum AuthProvider { email, google, apple }
 
 class UserProfile {
-  final String id;               // unique id (can be email for email users)
+  final String id;
   final String? email;
   final String? fullName;
   final String? nickName;
@@ -75,7 +75,7 @@ class UserProfile {
   final DateTime? dob;
   final String? photoUrl;
   final AuthProvider provider;
-  final String? passwordHash;    // demo only (plain text for simplicity)
+  final String? passwordHash;
 
   UserProfile({
     required this.id,
@@ -176,13 +176,13 @@ class LocalAuthService {
   Future<bool> verifyEmailPassword(String email, String password) async {
     final user = await getUserByEmail(email);
     if (user == null) return false;
-    if (user.provider != AuthProvider.email) return false; // social-only accounts don't have passwords here
-    return (user.passwordHash ?? '') == password;          // demo only
+    if (user.provider != AuthProvider.email) return false;
+    return (user.passwordHash ?? '') == password;
   }
 
   Future<void> signOut() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kCurrentUserIdKey); // keep users DB, clear session only
+    await prefs.remove(_kCurrentUserIdKey);
   }
 }
 
@@ -266,12 +266,11 @@ class _LoginPageState extends State<LoginPage> {
     try {
       setState(() => _busy = true);
 
-      // For web you may need to pass clientId: GoogleSignIn(clientId: 'YOUR_WEB_CLIENT_ID')
       final google = GoogleSignIn(scopes: ['email', 'profile']);
       final account = await google.signIn();
       if (account == null) {
         setState(() => _busy = false);
-        return; // user cancelled
+        return;
       }
       final user = UserProfile(
         id: 'google_${account.id}',
@@ -308,7 +307,7 @@ class _LoginPageState extends State<LoginPage> {
       final user = UserProfile(
         id: 'apple_${res.userIdentifier ?? DateTime.now().millisecondsSinceEpoch}',
         provider: AuthProvider.apple,
-        email: res.email, // may be null on subsequent logins
+        email: res.email,
         fullName: fullName.isEmpty ? null : fullName,
       );
       await LocalAuthService.instance.saveAndSetCurrentUser(user);
@@ -542,7 +541,7 @@ class _SignUpPageState extends State<SignUpPage> {
       phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
       gender: _gender,
       dob: _dob.text.isEmpty ? null : DateTime.tryParse(_dob.text),
-      passwordHash: _password.text, // demo only
+      passwordHash: _password.text, 
     );
     await LocalAuthService.instance.saveAndSetCurrentUser(profile);
     setState(() => _busy = false);
