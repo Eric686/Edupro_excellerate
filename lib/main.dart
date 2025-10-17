@@ -1,14 +1,29 @@
-import 'dart:convert';
-import 'dart:io' show Platform;
+// lib/main.dart
 
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:google_sign_in/google_sign_in.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+// Firebase
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
+
+// Social providers
+import 'package:google_sign_in/google_sign_in.dart' as gsi;
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
-void main() {
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  MAIN                                                                       */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   runApp(const EduProApp());
 }
 
@@ -57,137 +72,38 @@ class EduProApp extends StatelessWidget {
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
-/*  DATA LAYER (Local "DB" with SharedPreferences)                             */
+/*  FIREBASE SHORTCUTS + PROFILE UPSERT                                        */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-const _kUsersKey = 'edupro.users.v1';
-const _kCurrentUserIdKey = 'edupro.currentUserId.v1';
+final _auth = FirebaseAuth.instance;
+final _db = FirebaseFirestore.instance;
 
-enum AuthProvider { email, google, apple }
-
-class UserProfile {
-  final String id;
-  final String? email;
-  final String? fullName;
-  final String? nickName;
-  final String? phone;
-  final String? gender;
-  final DateTime? dob;
-  final String? photoUrl;
-  final AuthProvider provider;
-  final String? passwordHash;
-
-  UserProfile({
-    required this.id,
-    required this.provider,
-    this.email,
-    this.fullName,
-    this.nickName,
-    this.phone,
-    this.gender,
-    this.dob,
-    this.photoUrl,
-    this.passwordHash,
-  });
-
-  Map<String, dynamic> toMap() => {
-    'id': id,
-    'email': email,
-    'fullName': fullName,
+Future<void> _upsertUserProfile({
+  required User user,
+  String? fullName,
+  String? nickName,
+  String? phone,
+  String? gender,
+  DateTime? dob,
+  String? photoUrl,
+}) async {
+  final doc = _db.collection('users').doc(user.uid);
+  final data = <String, dynamic>{
+    'email': user.email,
+    'fullName': fullName ?? user.displayName,
     'nickName': nickName,
     'phone': phone,
     'gender': gender,
     'dob': dob?.toIso8601String(),
-    'photoUrl': photoUrl,
-    'provider': provider.name,
-    'passwordHash': passwordHash,
-  };
-
-  factory UserProfile.fromMap(Map<String, dynamic> m) => UserProfile(
-    id: m['id'] as String,
-    email: m['email'] as String?,
-    fullName: m['fullName'] as String?,
-    nickName: m['nickName'] as String?,
-    phone: m['phone'] as String?,
-    gender: m['gender'] as String?,
-    dob: m['dob'] != null ? DateTime.tryParse(m['dob'] as String) : null,
-    photoUrl: m['photoUrl'] as String?,
-    provider: AuthProvider.values.firstWhere(
-          (p) => p.name == (m['provider'] as String? ?? 'email'),
-      orElse: () => AuthProvider.email,
-    ),
-    passwordHash: m['passwordHash'] as String?,
-  );
-}
-
-class LocalAuthService {
-  LocalAuthService._();
-  static final LocalAuthService instance = LocalAuthService._();
-
-  Future<Map<String, UserProfile>> _loadUsersMap() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kUsersKey);
-    if (raw == null) return {};
-    final decoded = jsonDecode(raw) as Map<String, dynamic>;
-    return decoded.map((k, v) => MapEntry(k, UserProfile.fromMap((v as Map).cast<String, dynamic>())));
-  }
-
-  Future<void> _saveUsersMap(Map<String, UserProfile> users) async {
-    final prefs = await SharedPreferences.getInstance();
-    final enc = jsonEncode(users.map((k, v) => MapEntry(k, v.toMap())));
-    await prefs.setString(_kUsersKey, enc);
-  }
-
-  Future<void> _setCurrentUserId(String id) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kCurrentUserIdKey, id);
-  }
-
-  Future<String?> _getCurrentUserId() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_kCurrentUserIdKey);
-  }
-
-  /* Public API */
-
-  Future<UserProfile?> loadCurrentUser() async {
-    final id = await _getCurrentUserId();
-    if (id == null) return null;
-    final users = await _loadUsersMap();
-    return users[id];
-  }
-
-  Future<void> saveAndSetCurrentUser(UserProfile user) async {
-    final users = await _loadUsersMap();
-    users[user.id] = user;
-    await _saveUsersMap(users);
-    await _setCurrentUserId(user.id);
-  }
-
-  Future<UserProfile?> getUserByEmail(String email) async {
-    final users = await _loadUsersMap();
-    final e = email.trim().toLowerCase();
-    for (final u in users.values) {
-      if ((u.email ?? '').toLowerCase() == e) return u;
-    }
-    return null;
-  }
-
-  Future<bool> verifyEmailPassword(String email, String password) async {
-    final user = await getUserByEmail(email);
-    if (user == null) return false;
-    if (user.provider != AuthProvider.email) return false;
-    return (user.passwordHash ?? '') == password;
-  }
-
-  Future<void> signOut() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kCurrentUserIdKey);
-  }
+    'photoUrl': photoUrl ?? user.photoURL,
+    'providerIds': user.providerData.map((p) => p.providerId).toList(),
+    'updatedAt': FieldValue.serverTimestamp(),
+  }..removeWhere((_, v) => v == null);
+  await doc.set(data, SetOptions(merge: true));
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
-/*  SPLASH GATE: auto-route to /home if a session exists                      */
+/*  SPLASH GATE                                                                */
 /* ────────────────────────────────────────────────────────────────────────── */
 
 class SplashGate extends StatefulWidget {
@@ -200,17 +116,10 @@ class _SplashGateState extends State<SplashGate> {
   @override
   void initState() {
     super.initState();
-    _go();
-  }
-
-  Future<void> _go() async {
-    final user = await LocalAuthService.instance.loadCurrentUser();
-    if (!mounted) return;
-    if (user != null) {
-      Navigator.pushReplacementNamed(context, '/home');
-    } else {
-      Navigator.pushReplacementNamed(context, '/login');
-    }
+    _auth.authStateChanges().listen((user) {
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, user == null ? '/login' : '/home');
+    });
   }
 
   @override
@@ -232,7 +141,7 @@ class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _password = TextEditingController();
-  bool _remember = false;
+  bool _remember = false; // Firebase persists session anyway
   bool _obscure = true;
   bool _busy = false;
 
@@ -243,45 +152,51 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   Future<void> _loginEmail() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _busy = true);
-    final ok = await LocalAuthService.instance.verifyEmailPassword(_email.text, _password.text);
-    if (!ok) {
-      setState(() => _busy = false);
-      _snack('Invalid credentials or no local account. Try Sign Up.');
-      return;
+    try {
+      await _auth.signInWithEmailAndPassword(
+        email: _email.text.trim(),
+        password: _password.text,
+      );
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/home');
+    } on FirebaseAuthException catch (e) {
+      _snack(e.message ?? 'Email login failed');
+    } catch (e) {
+      _snack('Email login failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-    // set session to that user
-    final user = await LocalAuthService.instance.getUserByEmail(_email.text);
-    if (user != null) {
-      await LocalAuthService.instance.saveAndSetCurrentUser(user);
-    }
-    setState(() => _busy = false);
-    if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/home');
   }
 
   Future<void> _continueWithGoogle() async {
+    setState(() => _busy = true);
     try {
-      setState(() => _busy = true);
-
-      final google = GoogleSignIn(scopes: ['email', 'profile']);
-      final account = await google.signIn();
-      if (account == null) {
-        setState(() => _busy = false);
-        return;
+      if (kIsWeb) {
+        final cred = await _auth.signInWithPopup(GoogleAuthProvider());
+        await _upsertUserProfile(user: cred.user!);
+      } else {
+        final g = gsi.GoogleSignIn(scopes: const ['email', 'profile']);
+        final account = await g.signIn();
+        if (account == null) return; // cancelled
+        final auth = await account.authentication;
+        final credential = GoogleAuthProvider.credential(
+          idToken: auth.idToken,
+          accessToken: auth.accessToken,
+        );
+        final userCred = await _auth.signInWithCredential(credential);
+        await _upsertUserProfile(user: userCred.user!);
       }
-      final user = UserProfile(
-        id: 'google_${account.id}',
-        provider: AuthProvider.google,
-        email: account.email,
-        fullName: account.displayName,
-        photoUrl: account.photoUrl,
-      );
-      await LocalAuthService.instance.saveAndSetCurrentUser(user);
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
+    } on FirebaseAuthException catch (e) {
+      _snack(e.message ?? 'Google sign-in failed');
     } catch (e) {
       _snack('Google sign-in failed: $e');
     } finally {
@@ -294,34 +209,32 @@ class _LoginPageState extends State<LoginPage> {
       _snack('Sign in with Apple is only available on iOS/macOS.');
       return;
     }
+    setState(() => _busy = true);
     try {
-      setState(() => _busy = true);
-      final res = await SignInWithApple.getAppleIDCredential(
+      final apple = await SignInWithApple.getAppleIDCredential(
         scopes: [AppleIDAuthorizationScopes.email, AppleIDAuthorizationScopes.fullName],
       );
-      final fullName = [res.givenName ?? '', res.familyName ?? '']
-          .where((s) => s.isNotEmpty)
-          .join(' ')
-          .trim();
-
-      final user = UserProfile(
-        id: 'apple_${res.userIdentifier ?? DateTime.now().millisecondsSinceEpoch}',
-        provider: AuthProvider.apple,
-        email: res.email,
+      final oauth = OAuthProvider('apple.com').credential(
+        idToken: apple.identityToken,
+        accessToken: apple.authorizationCode,
+      );
+      final userCred = await _auth.signInWithCredential(oauth);
+      final fullName = [apple.givenName ?? '', apple.familyName ?? '']
+          .where((s) => s.isNotEmpty).join(' ').trim();
+      await _upsertUserProfile(
+        user: userCred.user!,
         fullName: fullName.isEmpty ? null : fullName,
       );
-      await LocalAuthService.instance.saveAndSetCurrentUser(user);
+
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
+    } on FirebaseAuthException catch (e) {
+      _snack(e.message ?? 'Apple sign-in failed');
     } catch (e) {
       _snack('Apple sign-in failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -437,7 +350,7 @@ class _LoginPageState extends State<LoginPage> {
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
-/*  SIGN UP (manual or prefilled by Google/Apple)                              */
+/*  SIGN UP PAGE                                                               */
 /* ────────────────────────────────────────────────────────────────────────── */
 
 class SignUpPage extends StatefulWidget {
@@ -470,6 +383,10 @@ class _SignUpPageState extends State<SignUpPage> {
     super.dispose();
   }
 
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   Future<void> _pickDob() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
@@ -485,14 +402,30 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 
   Future<void> _continueWithGoogle() async {
+    setState(() => _busy = true);
     try {
-      setState(() => _busy = true);
-      final google = GoogleSignIn(scopes: ['email', 'profile']);
-      final account = await google.signIn();
-      if (account != null) {
-        _email.text = account.email;
-        _fullName.text = account.displayName ?? '';
+      if (kIsWeb) {
+        final cred = await _auth.signInWithPopup(GoogleAuthProvider());
+        await _upsertUserProfile(user: cred.user!);
+        _email.text = cred.user?.email ?? _email.text;
+        _fullName.text = cred.user?.displayName ?? _fullName.text;
+      } else {
+        final g = gsi.GoogleSignIn(scopes: const ['email', 'profile']);
+        final account = await g.signIn();
+        if (account != null) {
+          final auth = await account.authentication;
+          final credential = GoogleAuthProvider.credential(
+            idToken: auth.idToken,
+            accessToken: auth.accessToken,
+          );
+          final userCred = await _auth.signInWithCredential(credential);
+          await _upsertUserProfile(user: userCred.user!);
+          _email.text = userCred.user?.email ?? '';
+          _fullName.text = userCred.user?.displayName ?? '';
+        }
       }
+    } on FirebaseAuthException catch (e) {
+      _snack(e.message ?? 'Google sign-in failed');
     } catch (e) {
       _snack('Google sign-in failed: $e');
     } finally {
@@ -505,17 +438,27 @@ class _SignUpPageState extends State<SignUpPage> {
       _snack('Sign in with Apple is only available on iOS/macOS.');
       return;
     }
+    setState(() => _busy = true);
     try {
-      setState(() => _busy = true);
-      final res = await SignInWithApple.getAppleIDCredential(
+      final apple = await SignInWithApple.getAppleIDCredential(
         scopes: [AppleIDAuthorizationScopes.email, AppleIDAuthorizationScopes.fullName],
       );
-      final fullName = [res.givenName ?? '', res.familyName ?? '']
-          .where((s) => s.isNotEmpty)
-          .join(' ')
-          .trim();
-      _fullName.text = fullName;
-      if (res.email != null) _email.text = res.email!;
+      final oauth = OAuthProvider('apple.com').credential(
+        idToken: apple.identityToken,
+        accessToken: apple.authorizationCode,
+      );
+      final userCred = await _auth.signInWithCredential(oauth);
+      final fullName = [apple.givenName ?? '', apple.familyName ?? '']
+          .where((s) => s.isNotEmpty).join(' ').trim();
+      await _upsertUserProfile(
+        user: userCred.user!,
+        fullName: fullName.isEmpty ? null : fullName,
+      );
+
+      _email.text = userCred.user?.email ?? _email.text;
+      _fullName.text = fullName.isEmpty ? _fullName.text : fullName;
+    } on FirebaseAuthException catch (e) {
+      _snack(e.message ?? 'Apple sign-in failed');
     } catch (e) {
       _snack('Apple sign-in failed: $e');
     } finally {
@@ -531,32 +474,38 @@ class _SignUpPageState extends State<SignUpPage> {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _busy = true);
-    final email = _email.text.trim();
-    final profile = UserProfile(
-      id: email.isNotEmpty ? 'email_$email' : 'local_${DateTime.now().microsecondsSinceEpoch}',
-      provider: AuthProvider.email,
-      email: email.isEmpty ? null : email,
-      fullName: _fullName.text.trim(),
-      nickName: _nickName.text.trim().isEmpty ? null : _nickName.text.trim(),
-      phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
-      gender: _gender,
-      dob: _dob.text.isEmpty ? null : DateTime.tryParse(_dob.text),
-      passwordHash: _password.text, 
-    );
-    await LocalAuthService.instance.saveAndSetCurrentUser(profile);
-    setState(() => _busy = false);
-    if (!mounted) return;
-    Navigator.pushNamedAndRemoveUntil(context, '/home', (_) => false);
-  }
+    try {
+      final cred = await _auth.createUserWithEmailAndPassword(
+        email: _email.text.trim(),
+        password: _password.text,
+      );
 
-  void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      await _upsertUserProfile(
+        user: cred.user!,
+        fullName: _fullName.text.trim(),
+        nickName: _nickName.text.trim().isEmpty ? null : _nickName.text.trim(),
+        phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+        gender: _gender,
+        dob: _dob.text.isEmpty ? null : DateTime.tryParse(_dob.text),
+      );
+
+      if (!mounted) return;
+      Navigator.pushNamedAndRemoveUntil(context, '/home', (_) => false);
+    } on FirebaseAuthException catch (e) {
+      _snack(e.message ?? 'Sign up failed');
+    } catch (e) {
+      _snack('Sign up failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(leading: BackButton(onPressed: () => Navigator.pop(context))),
+      appBar: AppBar(
+        leading: BackButton(onPressed: () => Navigator.pop(context)),
+      ),
       body: AbsorbPointer(
         absorbing: _busy,
         child: SafeArea(
@@ -700,15 +649,9 @@ class _SignUpPageState extends State<SignUpPage> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _SocialCircle(
-                          icon: FontAwesomeIcons.google,
-                          onTap: _continueWithGoogle,
-                        ),
+                        _SocialCircle(icon: FontAwesomeIcons.google, onTap: _continueWithGoogle),
                         const SizedBox(width: 16),
-                        _SocialCircle(
-                          icon: FontAwesomeIcons.apple,
-                          onTap: _continueWithApple,
-                        ),
+                        _SocialCircle(icon: FontAwesomeIcons.apple, onTap: _continueWithApple),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -734,31 +677,19 @@ class _SignUpPageState extends State<SignUpPage> {
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
-/*  HOME (just shows stored profile & Sign Out)                                */
+/*  HOME PAGE                                                                  */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-class HomePage extends StatefulWidget {
+class HomePage extends StatelessWidget {
   const HomePage({super.key});
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  UserProfile? _user;
-
-  @override
-  void initState() {
-    super.initState();
-    LocalAuthService.instance.loadCurrentUser().then((u) => setState(() => _user = u));
-  }
 
   @override
   Widget build(BuildContext context) {
-    final u = _user;
+    final u = _auth.currentUser;
     return Scaffold(
       appBar: AppBar(title: const Text('EDUPRO Home')),
       body: u == null
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: Text('No user'))
           : Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -767,17 +698,31 @@ class _HomePageState extends State<HomePage> {
             Row(children: [
               CircleAvatar(
                 radius: 28,
-                backgroundImage: (u.photoUrl != null) ? NetworkImage(u.photoUrl!) : null,
-                child: (u.photoUrl == null) ? const Icon(Icons.person, size: 28) : null,
+                backgroundImage: (u.photoURL != null) ? NetworkImage(u.photoURL!) : null,
+                child: (u.photoURL == null) ? const Icon(Icons.person, size: 28) : null,
               ),
               const SizedBox(width: 14),
               Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(u.fullName ?? 'Unnamed',
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                  Text(u.email ?? '(no email)'),
-                  Text('Provider: ${u.provider.name}'),
-                ]),
+                child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                  stream: _db.collection('users').doc(u.uid).snapshots(),
+                  builder: (context, snap) {
+                    final data = snap.data?.data();
+                    final fullName = data?['fullName'] ?? u.displayName ?? 'Unnamed';
+                    final email = u.email ?? '(no email)';
+                    final providers =
+                    u.providerData.map((p) => p.providerId).join(', ');
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(fullName,
+                            style: const TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.w600)),
+                        Text(email),
+                        Text('Providers: $providers'),
+                      ],
+                    );
+                  },
+                ),
               ),
             ]),
             const SizedBox(height: 20),
@@ -785,9 +730,15 @@ class _HomePageState extends State<HomePage> {
               icon: const Icon(Icons.logout),
               label: const Text('Sign Out'),
               onPressed: () async {
-                await LocalAuthService.instance.signOut();
-                if (!mounted) return;
-                Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+                if (!kIsWeb) {
+                  try {
+                    await gsi.GoogleSignIn().signOut();
+                  } catch (_) {}
+                }
+                await _auth.signOut();
+                if (context.mounted) {
+                  Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+                }
               },
             ),
           ],

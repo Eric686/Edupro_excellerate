@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "70090790117",
+    "project_id": "edupro-excellerate",
+    "storage_bucket": "edupro-excellerate.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:70090790117:android:860cf678838a165f74700c",
+        "android_client_info": {
+          "package_name": "com.example.ticket_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "70090790117-kjq9m548epm3hu6v96bvbcvj1tnc5mti.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ticket_app",
+            "certificate_hash": "2b03c6b9c234cbb9549a9cb9483681644b9805aa"
+          }
+        },
+        {
+          "client_id": "70090790117-vm9kgmkhhtstao63gcsjui4t9dnd07gh.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9MuhfG131593OVhz59ciVTAkYEOlbhZw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "70090790117-vm9kgmkhhtstao63gcsjui4t9dnd07gh.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "70090790117-7b77qoj07lnsvadak8cl4ki23ciubaro.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.ticketApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
